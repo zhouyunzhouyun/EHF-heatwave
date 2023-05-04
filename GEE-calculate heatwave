@@ -1,1 +1,278 @@
 
+var P95_W = ee.Image("users/tensorflow/World_EHF/World_TP95"),
+    imageCollection1 = ee.ImageCollection("ECMWF/ERA5_LAND/DAILY_RAW"),
+    Dot = /* color: #d63000 */ee.Geometry.Point([-66.32099335215963, -33.04072966251858]),
+    world = ee.FeatureCollection("users/tensorflow/continent_polygons"),
+    table = ee.FeatureCollection("USDOS/LSIB_SIMPLE/2017"),
+　　China = ee.FeatureCollection(table).filterMetadata('country_na','equals','China'),
+
+    geometry= China.geometry();
+    
+var i;
+for (i = 1964; i < 2023; i++) {
+    
+  // Map.addLayer(geometry)
+  // Map.addLayer(geometry)
+  var before = imageCollection1.filterDate('1963-07-11', '2022-06-10')
+  var after = imageCollection1.filterDate('2022-06-11','2022-12-30')
+  
+  // reference period of era5
+  var P0610 = ee.ImageCollection(imageCollection1).filterDate("2022-06-10")
+              // .select('temperature_2m')
+              .select('temperature_2m_mean')
+              .map(function(img){
+                return img.select('temperature_2m_mean').rename("temperature_2m")
+              }
+              )
+  
+  var imageCollection = before.merge(P0610).merge(after)
+        
+  // reference period of era5 30years
+  var P95 = ee.ImageCollection(imageCollection).filterDate('1964-01-01','1993-12-31')
+              .select('temperature_2m').reduce(ee.Reducer.percentile([95])).subtract(ee.Image(273.15));
+  var visualization = {
+    // bands: ['temperature_2m'],
+    min: -10.0,
+    max: 30.0,
+    palette: [
+      "#000080","#0000D9","#4000FF","#8000FF","#0080FF","#00FFFF",
+      "#00FF80","#80FF00","#DAFF00","#FFFF00","#FFF500","#FFDA00",
+      "#FFB000","#FFA400","#FF4F00","#FF2500","#FF0A00","#FF00FF",
+    ]
+  };
+  Map.setCenter(105.2, 30.4, 2);
+  Map.addLayer(P95.clip(geometry), visualization, "Air temperature [C] at 2m height");            
+  
+  // Export.image.toDrive({
+  //   image: P95.clip(geometry),
+  //   description: 'threshold_P95',
+  //   crs:"EPSG:4326",
+  //   folder: "EHF-dataset",
+  //   maxPixels: 1e13,
+  //   scale: 11132,
+  //   region: geometry.bounds()
+  // });
+  
+  
+  //move significance // EHIsig = (Τi+Τi-1 +Τi-2)/3]-Τ95
+  function moveavg(ImgCol, win_back, win_forw) {
+      if (typeof win_back === 'undefined') { win_back = 0; }
+      if (typeof win_forw === 'undefined') { win_forw = 0; }
+  
+      win_back = ee.Number(win_back);
+      win_forw = ee.Number(win_forw);
+  
+  
+      var n = ImgCol.size();
+      var y = ImgCol.toList(n);
+      // print("y.get(1):",y.get(1));//one day image
+      // print(win_back, win_forw, n);//3 3 365
+  
+      // 1. i: [0, win_back - 1], I = [0, i+win_forw]
+      var headval = ee.List.sequence(0, win_back.subtract(1)) //index begin at 0
+          // .aside(print, 'head')
+          .map(function(i) {
+              i = ee.Number(i);//i=1,5
+              var I_beg = i.add(1);//2,6
+              var I_end = I_beg.subtract(win_back).max(0); //end exclusive, so add 1  2-3=-1 max 0 = 0 / 6-3=3 max 0 3
+              // print("ee.Number(I_beg)",ee.Number(I_beg))
+              // print(I_end)
+              var image = ee.Image(y.get(i));
+              var avgmean = ee.ImageCollection(y.slice(I_end,I_beg)).mean();
+              var tempimage = avgmean.subtract(P95);
+              tempimage = tempimage.rename('Tmean_Sig');
+              return image.addBands(tempimage);
+              //return ee.ImageCollection(y.slice(I_beg, I_end)).mean().copyProperties(y.get(i), prop_global);
+              
+          });
+      // 2. i: [(n - win_forw), n - 1], I = [i - win_forw, n]
+      var tailval = ee.List.sequence(n.subtract(win_back), n.subtract(1))
+          // .aside(print,'tail')
+          .map(function(i) {
+              i = ee.Number(i);
+              var I_beg = i.add(1).min(n);
+              var I_end = I_beg.subtract(win_back);
+              var image = ee.Image(y.get(i));
+              var avgmean = ee.ImageCollection(y.slice(I_end,I_beg)).mean();
+              var tempimage = avgmean.subtract(P95);
+              tempimage = tempimage.rename('Tmean_Sig');
+              return image.addBands(tempimage);
+              //return ee.ImageCollection(y.slice(I_beg, I_end)).mean().copyProperties(y.get(i), prop_global);
+          });
+      // 3. i: [win_back, n - win_forw - 1], I = [i - win_back, i + win_forw]
+      var midval = ee.List.sequence(win_back, n.subtract(win_back).subtract(1))
+          // .aside(print, 'mid')
+          .map(function(i) {
+              i = ee.Number(i);
+              var I_beg = i.add(1);
+              var I_end = I_beg.subtract(win_back);
+              var image = ee.Image(y.get(i));
+              var avgmean = ee.ImageCollection(y.slice(I_end,I_beg)).mean();
+              var tempimage = avgmean.subtract(P95);
+              tempimage = tempimage.rename('Tmean_Sig');
+              return image.addBands(tempimage);
+              //return ee.ImageCollection(y.slice(I_beg, I_end)).mean().copyProperties(y.get(i), prop_global);
+          });
+  
+      var ymov = headval.cat(midval).cat(tailval);
+      // print('ans', ans);
+      return ee.ImageCollection(ymov);
+  }
+  
+  // move acclimatization EHIaccl = (Τi +Τi-1 +Τi-2)/3]-[(Τi-3+⋯+Τi-32)/33]
+  
+  function moveacc(ImgCol, win_back, win_forw) {
+      if (typeof win_back === 'undefined') { win_back = 0; }
+      if (typeof win_forw === 'undefined') { win_forw = 0; }
+  
+      win_back = ee.Number(win_back);
+      win_forw = ee.Number(win_forw);
+  
+      // print(win_back, win_forw, n);
+      var n = ImgCol.size();
+      var y = ImgCol.toList(n);
+      //print(y.get(1));
+      // print(win_back, win_forw, n);
+  
+      // 1. i: [0, win_back - 1], I = [0, i+win_forw]
+      var headval = ee.List.sequence(0, win_back.subtract(1)) //index begin at 0
+          // .aside(print, 'head')
+          .map(function(i) {
+              i = ee.Number(i); //i=1
+              var I_beg = i.add(1); // =2 
+              var I_mid = I_beg.subtract(3).max(0); // 0 
+              var I_end = I_beg.subtract(win_back).max(0); //end exclusive, so add 1  //0
+              // print(I_beg)
+              // print(I_end)
+              var image = ee.Image(y.get(i));
+              var avgmean_1 = ee.ImageCollection(y.slice(I_mid,I_beg)).mean();
+              var avgmean_2 = ee.ImageCollection(y.slice(I_end,I_mid.add(1))).mean();
+              var tempimage = avgmean_1.subtract(avgmean_2);
+              tempimage = tempimage.rename('Tmean_Acc');
+              tempimage = tempimage.max(1);
+              return image.addBands(tempimage);
+              //return ee.ImageCollection(y.slice(I_beg, I_end)).mean().copyProperties(y.get(i), prop_global);
+              
+          });
+      // 2. i: [(n - win_forw), n - 1], I = [i - win_forw, n]
+      var tailval = ee.List.sequence(n.subtract(win_forw), n.subtract(1))
+          // .aside(print,'tail')
+          .map(function(i) {
+              i = ee.Number(i);
+              var I_beg = i.add(1).min(n);
+              var I_mid = I_beg.subtract(3);
+              var I_end = I_beg.subtract(win_back);
+              var image = ee.Image(y.get(i));
+              var avgmean_1 = ee.ImageCollection(y.slice(I_mid,I_beg)).mean();
+              var avgmean_2 = ee.ImageCollection(y.slice(I_end,I_mid)).mean();
+              var tempimage = avgmean_1.subtract(avgmean_2);
+              tempimage = tempimage.rename('Tmean_Acc');
+              tempimage = tempimage.max(1);
+              return image.addBands(tempimage);
+              //return ee.ImageCollection(y.slice(I_beg, I_end)).mean().copyProperties(y.get(i), prop_global);
+          });
+      // 3. i: [win_back, n - win_forw - 1], I = [i - win_back, i + win_forw]
+      var midval = ee.List.sequence(win_back, n.subtract(win_forw).subtract(1))
+          // .aside(print, 'mid')
+          .map(function(i) {
+              i = ee.Number(i);
+              var I_beg = i.add(1);
+              var I_mid = I_beg.subtract(3);
+              var I_end = I_beg.subtract(win_back);
+              var image = ee.Image(y.get(i));
+              var avgmean_1 = ee.ImageCollection(y.slice(I_mid,I_beg)).mean();
+              var avgmean_2 = ee.ImageCollection(y.slice(I_end,I_mid)).mean();
+              var tempimage = avgmean_1.subtract(avgmean_2);
+              tempimage = tempimage.rename('Tmean_Acc');
+              tempimage = tempimage.max(1);
+              return image.addBands(tempimage);
+              //return ee.ImageCollection(y.slice(I_beg, I_end)).mean().copyProperties(y.get(i), prop_global);
+          });
+  
+      var ymov = headval.cat(midval).cat(tailval);
+      // print('ans', ans);
+      return ee.ImageCollection(ymov);
+  }
+  
+  // calculate the Tmax by abstracting 273.15
+  function meanfunc(img){
+    var tmean = img.select('temperature_2m').subtract(ee.Image(273.15));
+    return tmean.rename('Tmean').copyProperties(img,img.propertyNames())
+  }
+  
+  function EHFfunc(img){
+    var Acc  = img.select('Tmean_Acc');
+    var Sig = img.select('Tmean_Sig');
+    var EHF = Acc.multiply(Sig);
+    return EHF.rename('EHF').copyProperties(img,img.propertyNames());//img.propertyNames()
+  }
+  
+  
+  var filterTimeEq = ee.Filter.equals({
+    leftField : 'system:time_end',
+    rightField: 'system:time_end'
+  });
+  
+  function joinfea(feature) {return ee.Image(feature.get('primary')).addBands(feature.get('secondary'));}
+  
+  function InnerJoin(primary, secondary, filter, join) {
+      join = typeof join !== 'undefined' ?  join : ee.Join.inner();
+      var JoinedImgCol_raw = join.apply(primary, secondary, filter); //Joins two collections
+      var joinedImgCol = JoinedImgCol_raw.map(joinfea);
+      return ee.ImageCollection(joinedImgCol);
+  }
+  
+  function strcon(x) {return ee.String('EHF_').cat(ee.Date(x).format('YYYY_MM_dd'));}
+  
+  // var i = 2022;
+  
+  var startdate = i.toString()+'-05-01';
+  var enddate   = ee.Date(startdate).advance(5,"month");
+  
+  var eracol = ee.ImageCollection(imageCollection).filterDate(startdate,enddate);
+  eracol = eracol.map(meanfunc);
+  // print("eracol",eracol)
+  //#############################################################################################
+  // EHF collection calculation  EHF = EHIsig × max [1, EHIaccl]
+  var movesig = moveavg(eracol,3,3);
+  // print("movesig",movesig)
+  
+  var moveacce = moveacc(eracol,33,33);
+  
+  var sigacc = InnerJoin(movesig,moveacce,filterTimeEq);
+  // print("sigacc:",sigacc)
+  
+  var EHF_Dataset = sigacc.map(EHFfunc);
+  // print("EHF_Dataset:",EHF_Dataset)
+  
+  function export_img(img, folder, task){
+      Export.image.toAsset({
+            image : img,
+            description: task,
+            assetId: folder.concat('/').concat(task),
+            //range: [-0.125, -90.125, 179.875, 90.125],
+            //dimensions:"1440x721",
+            crs:"EPSG:4326",
+            scale: 11132,
+            region:geometry.bounds(),
+            //crsTransform: [0.25, 0, -180, 0, -0.25, 89.875],
+            maxPixels: 1e13
+      });
+  }
+  
+  
+  var stryear  = i.toString();
+  var startEHF = stryear.concat('-05-01');
+  startEHF = ee.Date(startEHF); 
+  var endEHF   = startEHF.advance(5,'month');
+  
+  EHF_Dataset = EHF_Dataset.filterDate(startEHF,endEHF);
+  
+  var img_out = EHF_Dataset.toArray();
+  var ids = ee.List(EHF_Dataset.aggregate_array('system:time_start')).map(strcon);
+  img_out = img_out.arraySlice(1, -1).arrayProject([0]).arrayFlatten([ids]);//convert into image;
+  // print("img_out",img_out)
+  var outstr = 'Merged_EHF_'+i.toString();
+  export_img(img_out, 'CN_ERA5_EHF', outstr);
+
+}
