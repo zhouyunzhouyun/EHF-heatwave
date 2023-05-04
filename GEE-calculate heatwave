@@ -1,8 +1,5 @@
 
-var P95_W = ee.Image("users/tensorflow/World_EHF/World_TP95"),
-    imageCollection1 = ee.ImageCollection("ECMWF/ERA5_LAND/DAILY_RAW"),
-    Dot = /* color: #d63000 */ee.Geometry.Point([-66.32099335215963, -33.04072966251858]),
-    world = ee.FeatureCollection("users/tensorflow/continent_polygons"),
+var imageCollection1 = ee.ImageCollection("ECMWF/ERA5_LAND/DAILY_RAW"),
     table = ee.FeatureCollection("USDOS/LSIB_SIMPLE/2017"),
 　　China = ee.FeatureCollection(table).filterMetadata('country_na','equals','China'),
 
