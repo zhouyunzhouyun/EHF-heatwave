@@ -1,1 +1,123 @@
+var table = ee.FeatureCollection("USDOS/LSIB_SIMPLE/2017")
+
+var China = ee.FeatureCollection(table).filterMetadata('country_na','equals','China')
+var geometry = China.geometry();
+
+var i;
+for (i = 2001; i < 2021; i++) {
+ 
+// var i = 2001
+var heatwave_days = functocol(i)
+print("heatwave_days",heatwave_days)
+
+function functocol(year){
+    // Original string 
+    var str = 'users/yunswu/CN_ERA5_LAND_HWF/ERA5_LAND_HWF_';
+    // Joining the strings together
+    var stryear   = year.toString();
+    var asset = str.concat(stryear); //image name string
+    var img1 = ee.Image(asset);
+    // print("HWF",img1)
+    // var meantemp = multibandstoImageCollection(img);
+    // var newcoll = meantemp.map(function(image){
+    // var start = stryear.concat('-11-01');
+    // start = ee.Date(start);
+    // var dateindex = image.get('system:index');
+    // //var dateofimage = dateList(dateindex);
+    // var index = ee.Number.parse(dateindex);
+    // //var len = parseInt(index);
+    // var date = start.advance(index,'day');
+    // var month = date.get('month');
+    // //var date = ee.Date(daily_coll.get(len));
+    // return ee.Image(image).setMulti({
+    //         'system:time_start' : date,
+    //         'system:time_end'   : date,
+    //         'month'             : month
+    // });
+    // });
+    // return newcoll;
+    return img1
+}
+
+// function multibandstoImageCollection(image) {
+//   function selectBand(image) {
+//     return function(bandName) {
+//       return image.select([bandName]).rename('HWF');
+//     }
+//   }
+//   var bandNames = image.bandNames()
+//   return ee.ImageCollection.fromImages(bandNames.map(selectBand(image)))
+// }
+
+function functoimage(year){
+    var str = 'users/yunswu/CN_aging_rate/age_rate_';
+    // Joining the strings together
+    var stryear   = year.toString();
+    var asset = str.concat(stryear); //image name string
+    var img2 = ee.Image(asset);
+    // print("age_rate",img2)
+    return img2
+}
+
+var aging_rate = functoimage(i)
+print("aging_rate",aging_rate)
+
+var data = aging_rate.rename('agerate');
+var img = heatwave_days.addBands(data);
+print("img",img)
+
+var stryear   = i.toString()
+var dateRange = ee.DateRange(stryear.concat('-01-01'), stryear.concat('-12-31'))
+var pop = landscan_global.filterDate(dateRange).toBands()
+print("pop",pop)
+
+var data1 = pop.rename('pop');
+var img2 = img.addBands(data1);
+print("img2",img2)
+
+
+function exposure(img){
+  var heatwave = img.select(["HWF","agerate","pop"])
+      heatwave = heatwave.expression(
+      'HN*agerate*pop', {
+      'HN':heatwave.select(["HWF"]),
+      'agerate':heatwave.select(["agerate"]),
+      "pop":heatwave.select(["pop"])
+    }).rename("age_exposure")
+  return img.addBands(heatwave)}
+
+var exposure1 = exposure(img2)
+
+// print("exposure1",exposure1)
+// Map.addLayer(exposure1, {}, 'Population exposure in 2000');
+
+  
+function agepop(img){
+  var heatwave = img.select(["agerate","pop"])
+      heatwave = heatwave.expression(
+      'agerate*pop', {
+      'agerate':heatwave.select(["agerate"]),
+      "pop":heatwave.select(["pop"])
+    }).rename("age_pop")
+  return img.addBands(heatwave)}
+
+var exposure2 =agepop(exposure1).set("system:time_start",ee.Date(i.toString().concat('-01-01')))
+
+print("exposure2",exposure2)
+// Map.addLayer(exposure1, {}, 'Population exposure in 2000');
+
+  var task = 'CN_age_pop_exposure_'+i.toString()
+  var folder = 'users/yunswu/CN_age_pop_exposure_new'
+  Export.image.toAsset({
+    image: exposure2,
+    description: task,
+    assetId:folder.concat('/').concat(task),
+    region: China.geometry().bounds(),
+    scale: 11132,
+    crs:  'EPSG:4326'
+  })  
+  
+}
+
+
 
