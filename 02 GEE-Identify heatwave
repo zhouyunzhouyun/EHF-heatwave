@@ -1,1 +1,367 @@
 
+var stations = ee.FeatureCollection(table2).filter(ee.Filter.eq('station_1','CaoShang')) ;
+
+var Australia = ee.FeatureCollection(table).filterMetadata('country_na','equals','China')
+var geometry = Australia.geometry(); 
+
+var InnerJoin  = require('users/geogismx/mountain_solar:join.js'); 
+
+function InnerJoin(primary, secondary, filter, join) {
+    join = typeof join !== 'undefined' ?  join : ee.Join.inner();
+    var JoinedImgCol_raw = join.apply(primary, secondary, filter);
+    var joinedImgCol = JoinedImgCol_raw.map(joinfea);
+    return ee.ImageCollection(joinedImgCol);
+} 
+
+
+
+function functocol(year){
+    // Original string 
+    var str = 'users/yunswu/CN_ERA5_EHF/Merged_EHF_';
+    // Joining the strings together
+    var stryear   = year.toString();
+    var asset = str.concat(stryear); //image name string
+    var img = ee.Image(asset);
+    print("img",img)
+    var meantemp = multibandstoImageCollection(img);
+    var newcoll = meantemp.map(function(image){
+    var start = stryear.concat('-05-01');
+    start = ee.Date(start);
+    var dateindex = image.get('system:index');
+    //var dateofimage = dateList(dateindex);
+    var index = ee.Number.parse(dateindex);
+    //var len = parseInt(index);
+    var date = start.advance(index,'day');
+    var month = date.get('month');
+    //var date = ee.Date(daily_coll.get(len));
+    return ee.Image(image).setMulti({
+            'system:time_start' : date,
+            'system:time_end'   : date,
+            'month'             : month
+    });
+    });
+    return newcoll;
+}
+
+function multibandstoImageCollection(image) {
+  function selectBand(image) {
+    return function(bandName) {
+      return image.select([bandName]).rename('EHF');
+    }
+  }
+  var bandNames = image.bandNames()
+  return ee.ImageCollection.fromImages(bandNames.map(selectBand(image)))
+}
+
+function heatwave(imgcoll,maxThresh){
+
+  var dataset = imgcoll.map(function(img){
+       return img.addBands(ee.Image.constant(0).toDouble().rename('counter'));
+    }).sort('system:time_start');
+  
+  function heatSpells(img, list){
+    var prev = ee.Image(ee.List(list).get(-1));
+    var hot = img.select([0]).gt(maxThresh);
+    var accum = prev.select('counter').add(hot).rename('counter');
+    var out = img.select([0]).addBands(img.select('counter').where(hot.eq(1),accum));
+    return ee.List(list).add(out);
+  }
+  
+  // create first image for iteration
+  var first = ee.List([ee.Image(dataset.first())]);
+  // apply dry speall iteration function
+  var lists = dataset.iterate(heatSpells,first); // get the max value
+  lists = ee.List(lists).slice(1,null);
+  return ee.ImageCollection.fromImages(lists);
+  
+
+}
+
+// HWN mean how many discrete heatwave events for the selected season.
+// HWM means the sum of EHF on all days classed as heatwave days, divide by the number of such days.
+// HWA refers to the hottest day of the hottest heatwave of the year. 
+// The hottest heatwave is the one with the highest average EHF across all days of the heatwave
+// The hottest day of this heatwave is also selected, based on the day within the heatwave with the highest EHF.
+// HWF the number of days in the sum of the duration of all four events.
+// HWF is the sum of days that belong to a period of at least 3 consecutive days where EHF is positive
+
+function itt1(img, list){
+    // get last image
+    var prev = ee.Image(ee.List(list).get(-1));
+    // find areas gt 1 threshold (gt==1, lt==0)
+    var hot =  prev.select('subwave1').eq(1);
+    // add previous day counter to today's counter
+    var accum = img.select('subwave1').add(hot).rename('xcounter');
+    // create a result image for iteration
+    var out = img.addBands(accum);
+    return ee.List(list).add(out);
+}
+
+
+function itt2(img, list){
+    // get last image
+    var prev = ee.Image(ee.List(list).get(-1));
+    // find areas eq 1 and eq 0
+    var hot =  img.select('xcounter').eq(0).and(prev.select('xcounter').eq(1));
+    // add previous day counter to today's counter
+    var accum = img.select('xcounter').add(hot).rename('xcounter1');
+    // create a result image for iteration
+    var out = img.addBands(accum);
+    return ee.List(list).add(out);
+}
+
+function itt3(img, list){
+    // get last image
+    var prev = ee.Image(ee.List(list).get(-1));
+    // find areas eq 1 and eq 0
+    var hot =  img.select('heat_identity').eq(1).and(prev.select('heat_identity').eq(0));
+    // add previous day counter to today's counter
+    var accum = img.select('newcounter').add(hot).rename('accumpoint');
+    // create a result image for iteration
+    var out = img.addBands(accum);
+    return ee.List(list).add(out);
+}
+
+function itt4(img, list){
+    var prev = ee.Image(ee.List(list).get(-1));
+    var hot  = img.select('counter').gt(0);
+    //var accumEHF = prev.select('mEHF').multiply(hot).add(img.select('mEHF')).rename('accumEHF')
+    //var accumEHF = part1;
+    //var prevs = prev.select('mEHF').rename('accumEHF')
+    img = img.select('accumEHF').where(hot.eq(1),prev.select('accumEHF').add(img.select('accumEHF')))
+    //var accum = img.select('mEHF').multiply(hot);
+    //var accum = prev.select('mEHF').multiply(hot).add(img.select('mEHF')).rename('tEHF');
+    var out = img;
+    //var accumEHF = img.select('tEHF').where(hot.eq(1),accum);
+    //var out = img.addBands(accumEHF.toDouble());
+    return ee.List(list).add(out);
+  }
+
+//print(HWFcol)
+// create first image for iteration
+
+function silotemp(year){
+  var stryear = year.toString();
+  var start = stryear.concat('-05-01');
+  start = ee.Date(start);
+  var end   = start.advance(5,'month');
+  var yearofsilo = ee.ImageCollection(silo).filterDate(start,end);
+  //print(yearofsilo)
+  var newsilo    = yearofsilo.map(function(image){
+    var maxtemp  = image.select('max_temp');
+    var mintemp  = image.select('min_temp');
+    var meantemp = maxtemp.add(mintemp).divide(2);
+    meantemp = meantemp.rename('Tmean');
+    //#############################//
+    //Before 2017, 'date' property name is 'Date'
+    //After  2017, 'date' property name is 'date'
+    //#############################//
+    var date =  image.get('system:time_start');
+    date = ee.Date(date);
+    var month = date.get('month');
+    return meantemp.setMulti({
+            'system:time_start' :date,
+            'system:time_end'   :date,
+            'month'             :month
+    });
+  });
+  return newsilo;
+}
+
+
+
+
+var i = 2022;
+
+//var tempcol = silotemp(i);
+
+var EHF_Dataset = functocol(i);
+
+print("EHF_Dataset",EHF_Dataset)
+
+var HWFdataset = heatwave(EHF_Dataset,0).map(function(img){
+       return img.addBands(ee.Image.constant(0).toDouble().rename('newcounter'));
+    }).sort('system:time_start');
+
+var HWFcol = HWFdataset.map(function(img){
+    var newcounter = img.select('newcounter');
+    var subcount1 = newcounter.where(img.select('counter').eq(3),1);
+    var subcount2 = newcounter.where(img.select('counter').gt(3),1);
+    return img.addBands(subcount1.rename('subwave1')).addBands(subcount2.rename('subwave2'));
+});
+
+
+var first1   = ee.List([ee.Image(HWFcol.first())]);
+// reverse the  imglist
+var n = HWFcol.size();
+
+var HWFcols = ee.List(HWFcol.toList(n)).reverse();
+// make it into imgcoll
+HWFcols     = ee.ImageCollection.fromImages(HWFcols);
+var list1   = HWFcols.iterate(itt1,first1);
+list1       = ee.List(list1).slice(1,null);
+var HWFcoln = ee.ImageCollection.fromImages(list1);
+
+//print(HWFcoln);
+
+HWFcoln = HWFcoln.select([0,1,2,4,5])
+  
+var first2 = ee.List([ee.Image(HWFcoln.first())]);
+var list2 = HWFcoln.iterate(itt2,first2);
+list2 = ee.List(list2).slice(1,null).reverse();
+var HWFcolns = ee.ImageCollection.fromImages(list2);
+
+//print(HWFcolns)
+HWFcolns = HWFcolns.map(function(img){
+    var EHF       = img.select('EHF');
+    var subwave2  = img.select('subwave2');
+    var xcounter1 = img.select('xcounter1');
+    var nheat     = subwave2.add(xcounter1);
+    var mEHF      = nheat.multiply(EHF);
+    var accumEHF      = mEHF;
+    return img.addBands(nheat.rename('heat_identity')).addBands(mEHF.rename('mEHF')).addBands(accumEHF.rename('accumEHF'));
+});
+
+//print(HWFcolns)
+HWFcolns = HWFcolns.select([0,1,2,6,7,8])
+
+var first3 = ee.List([ee.Image(HWFcolns.first())]);
+
+
+HWFcolns = ee.List(HWFcolns.toList(n)).reverse();
+HWFcolns     = ee.ImageCollection.fromImages(HWFcolns);
+var list3 = HWFcolns.iterate(itt3,first3);
+list3 = ee.List(list3).slice(1,null).reverse();
+HWFcolns = ee.ImageCollection.fromImages(list3);
+
+//print(HWFcolns)
+
+HWFcolnt = HWFcolns.select([1,6]);
+var first4 = ee.List([ee.Image(HWFcolns.first())]);
+// apply EHF iteration function
+var list4 = HWFcolns.iterate(itt4,first4); // get the max value
+list4 = ee.List(list4).slice(1,null);
+var HWFcolnt = ee.ImageCollection.fromImages(list4);
+
+//print(HWFcolnt);
+
+//
+
+var EHFcollection = InnerJoin.InnerJoin(HWFcolns.select([0,1,3,4,6]), HWFcolnt, InnerJoin.filterTimeEq);
+// print("EHFcollection", EHFcollection)
+
+EHFcollection = EHFcollection.map(function(img){
+  
+  var accumEHF     = img.select('accumEHF').multiply(img.select('accumpoint')).rename('accumEHF');
+  var accumcounter = img.select('counter').multiply(img.select('accumpoint')).rename('maxlens');
+  var meanEHF      = accumEHF.divide(accumcounter);
+  var mEHF         = img.select('mEHF');
+  return mEHF.addBands(meanEHF.rename('meanEHF')).addBands(img.select('accumpoint')).addBands(accumcounter).addBands(accumEHF).copyProperties(img,img.propertyNames());
+  
+});
+
+print("EHFcollection", EHFcollection)
+
+
+var HWD     = EHFcollection.select('maxlens').reduce(ee.Reducer.max());
+
+HWD = HWD.rename("HWD");
+
+var HWA     = EHFcollection.select('mEHF').reduce(ee.Reducer.max());
+
+HWA = HWA.rename("HWA");
+
+var HWF     = EHFcollection.select('maxlens').reduce(ee.Reducer.sum());
+
+HWF = HWF.rename("HWF");
+
+var HWA_Sum = EHFcollection.select('meanEHF').reduce(ee.Reducer.sum());
+
+var HWN     = EHFcollection.select('accumpoint').reduce(ee.Reducer.sum());
+
+HWN = HWN.rename("HWN");
+
+var HWM     = HWA_Sum.divide(HWN);
+
+HWM = HWM.rename("HWM");
+
+//var HWA     = HWFcolns.select('mEHF').reduce(ee.Reducer.max());
+
+//var HWs = HWA.addBands(HWD).addBands(HWF).addBands(HWM).addBands(HWN);
+//
+////HWs = ee.Image(HWs);
+//
+//function export_img(img, folder, task){
+//    Export.image.toAsset({
+//          image : img,
+//          description: task,
+//          assetId: folder.concat('/').concat(task), 
+//          region: geometry.bounds(),
+//          scale :5000,
+//          maxPixels: 1e13
+//    });
+//}
+//
+//var outstr  = 'Aus_SILO_'+ i.toString();
+//export_img(HWs, 'Aus_SILO_HW', outstr);
+
+
+//var HWA     = HWFcolns.select('mEHF').reduce(ee.Reducer.max());
+
+//HWA = HWA.rename("HWA");
+
+var HWNs = HWN.clip(geometry);
+
+// Map.addLayer(HWN.clip(geometry),{min:0,max:10,palette:'#9ecae1,#ffffff,#ffeda0,#feb24c,#f03b20'},'heatwave amplitude');
+//var Australia = ee.FeatureCollection(table).filterMetadata('country_na','equals','Australia')
+//var geometry = Australia.geometry();
+// Export.image.toDrive({
+//   image: HWNs,
+//   description: 'ERA5_EHF_HWN_2018',
+//   folder: 'Method_Map',
+//   region: Australia.geometry().bounds(),
+//   scale: 11132,
+//   crs:  'EPSG:4326'
+// })
+// Map.addLayer(HWA.clip(geometry),{min:0,max:50,palette:'#9ecae1,#ffffff,#ffeda0,#feb24c,#f03b20'},'heatwave amplitude');
+
+
+// var HWFcolf = HWFcolns.map(function(img){
+//     var startdate = ee.Date('2018-11-01'); 
+//     var days     = ee.Date(img.get('system:time_start')).difference(startdate,'day');
+//         days     = ee.Image(days).uint8();
+//     //var subcount = newcounter.where(img.select('counter').eq(3),1);
+//     var daysitv  = img.select('heat_identity').multiply(days);
+//     //var onset   = days.mask(counter.gte(3));
+//     return img.addBands(daysitv.rename('daysitv'));
+// });
+
+// var HWF = HWFcolf.select('subwave1').reduce(ee.Reducer.sum());
+Map.addLayer(HWF.clip(geometry),{min:0,max:60,palette:'#9ecae1,#ffffff,#ffeda0,#feb24c,#f03b20'},'Total heatwave days');
+
+Export.image.toAsset({
+  image: HWF,
+  description: 'ERA5_LAND_HWF_'+i.toString(),
+  assetId: 'users/yunswu/CN_heatwave_totaldays',
+  region: Australia.geometry().bounds(),
+  scale: 11132,
+  crs:  'EPSG:4326'
+})
+
+
+var point = stations;
+// var tChart     = ui.Chart.image.series(tempcol.select('Tmean'), point, ee.Reducer.first(), 5000);
+var hchart     = ui.Chart.image.series(EHF_Dataset.select('EHF'), point, ee.Reducer.first(), 11132);
+var mChart     = ui.Chart.image.series(HWFcolns.select('mEHF'), point, ee.Reducer.first(), 11132);
+var ccChart    = ui.Chart.image.series(HWFcolns.select('counter'), point, ee.Reducer.first(), 11132);
+var accumChart = ui.Chart.image.series(HWFcolnt.select('accumEHF'), point, ee.Reducer.first(),11132 );
+var meanChart = ui.Chart.image.series(EHFcollection.select('meanEHF'), point, ee.Reducer.first(),11132 );
+
+
+// print(tChart);
+print("EHF",hchart);
+print("mEHF",mChart); //Heatwave maximum amplitude
+print("counter",ccChart); //持续duration 
+print("accumEHF",accumChart); //accumlation of heatwave intensity
+print("meanEHF", meanChart); //mean intesity
+
