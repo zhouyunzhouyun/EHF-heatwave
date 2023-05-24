@@ -1,1 +1,97 @@
+var table = ee.FeatureCollection("USDOS/LSIB_SIMPLE/2017")
+
+var ROI = ee.FeatureCollection(table).filterMetadata('country_na','equals','China')
+
+print("image",image)
+
+ 
+// 定义要素集合
+
+var yearStart = 2001;
+var yearEnd = 2020;
+
+// 创建一个空的 ImageCollection
+var ic = ee.ImageCollection([]);
+
+// 遍历所有年份
+for (var year = yearStart; year <= yearEnd; year++) {
+  // 构建图像 ID
+  var imageId = 'users/yunswu/CN_age_pop_exposure'+ '/' + 'CN_age_pop_exposure_' + year.toString();
+  var timeStart = ee.Date.fromYMD(year, 1, 1).millis();
+  // 加载图像
+  var image = ee.Image(imageId);
+  
+  // 选择要合并的 band
+  var bandsToMerge = ["HWF","agerate","pop","age_exposure","age_pop"];
+  var mergedImage = image.select(bandsToMerge).set('system:time_start', timeStart);
+  
+  // 将图像添加到 ImageCollection
+  ic = ic.merge(ee.ImageCollection([mergedImage]));
+}
+
+// 显示结果
+print('ic', ic)
+
+// var variable = "age_exposure"
+// var variable = "HWF"
+var variable = "age_pop"
+
+var coll1 = ic.select(variable).mean()
+print("coll1",coll1)
+
+var coll = ic.select(variable)
+
+print("coll",coll)
+
+
+// Define study area and time period of interest
+var studyArea = ee.Geometry.Rectangle(80, 20, 130, 50);
+var startDate = '2000-01-01';
+var endDate = '2010-01-01';
+
+// Load exposure data for the two time periods
+var exposureBefore = ee.ImageCollection('exposure_data')
+  .filterDate('1990-01-01', '2000-01-01')
+  .mean();
+var exposureAfter = ee.ImageCollection('exposure_data')
+  .filterDate(startDate, endDate)
+  .mean();
+
+// Calculate exposure changes
+var exposureChange = exposureAfter.subtract(exposureBefore);
+
+// Load climate and population data for the two time periods
+var climateBefore = ee.ImageCollection('climate_data')
+  .filterDate('1990-01-01', '2000-01-01')
+  .mean();
+var climateAfter = ee.ImageCollection('climate_data')
+  .filterDate(startDate, endDate)
+  .mean();
+var populationBefore = ee.ImageCollection('population_data')
+  .filterDate('1990-01-01', '2000-01-01')
+  .mean();
+var populationAfter = ee.ImageCollection('population_data')
+  .filterDate(startDate, endDate)
+  .mean();
+
+// Calculate changes in climate and population
+var climateChange = climateAfter.subtract(climateBefore);
+var populationChange = populationAfter.subtract(populationBefore);
+
+// Calculate climate effect on exposure
+var climateEffect = climateChange.multiply(exposureBefore);
+
+// Calculate population effect on exposure
+var populationEffect = populationChange.multiply(exposureBefore);
+
+// Calculate combined effect on exposure
+var combinedEffect = exposureChange.subtract(climateEffect).subtract(populationEffect);
+
+// Display the results
+Map.addLayer(exposureChange, {}, 'Exposure change');
+Map.addLayer(climateEffect, {}, 'Climate effect');
+Map.addLayer(populationEffect, {}, 'Population effect');
+Map.addLayer(combinedEffect, {}, 'Combined effect');
+
+
 
