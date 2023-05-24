@@ -95,3 +95,65 @@ Map.addLayer(combinedEffect, {}, 'Combined effect');
 
 
 
+var table2 = ee.FeatureCollection("USDOS/LSIB_SIMPLE/2017");
+var China = ee.FeatureCollection(table2).filterMetadata('country_na','equals','China');
+var geometry = China.geometry(); 
+
+
+// Function to calculate effects for a single year
+function calculateEffectsForYear(year) { 
+  // var yearNumber = ee.Number(year);
+  // var yearString = yearNumber.toString();
+  var heatwave_base = ee.Image("users/yunswu/CN_age_pop_exposure_new/CN_age_pop_exposure_2001").select("HWF");
+  var heatwave_future = ee.Image("users/yunswu/CN_age_pop_exposure_new/CN_age_pop_exposure_" + year).select("HWF");
+
+  var population_base =  ee.Image("users/yunswu/CN_age_pop_exposure_new/CN_age_pop_exposure_2001").select("age_pop");
+  var population_future =  ee.Image("users/yunswu/CN_age_pop_exposure_new/CN_age_pop_exposure_" + year).select("age_pop");
+
+  var delta_heatwave = heatwave_future.subtract(heatwave_base);
+  var delta_population = population_future.subtract(population_base);
+
+  var climate_effect = population_base.multiply(delta_heatwave).rename("climate_effect");
+  var population_effect = heatwave_base.multiply(delta_population).rename("population_effect");
+  var combined_effect = delta_population.multiply(delta_heatwave).rename("combined_effect");
+
+  var climate_effect_sum = climate_effect.reduceRegion({
+    reducer: ee.Reducer.sum(),
+    geometry: geometry,
+    scale: 11132,
+    maxPixels: 1e9
+  });
+
+  var population_effect_sum = population_effect.reduceRegion({
+    reducer: ee.Reducer.sum(),
+    geometry: geometry,
+    scale: 11132,
+    maxPixels: 1e9
+  });
+
+  var combined_effect_sum = combined_effect.reduceRegion({
+    reducer: ee.Reducer.sum(),
+    geometry: geometry,
+    scale: 11132,
+    maxPixels: 1e9
+  });
+
+  return ee.Feature(null, {
+    'year': year,
+    'climate_effect': climate_effect_sum.get('climate_effect'),
+    'population_effect': population_effect_sum.get('population_effect'),
+    'combined_effect': combined_effect_sum.get('combined_effect')
+  });
+}
+var years = ['2002','2003','2004','2005','2006','2007','2008','2009','2010','2011','2012','2013','2014','2015','2016','2017','2018','2019','2020'];
+// var years = ee.List.sequence(2002, 2020);
+var effectsList = years.map(calculateEffectsForYear);
+var effectsFeatureCollection = ee.FeatureCollection(effectsList);
+
+// Export the results as a CSV file
+Export.table.toDrive({
+  collection: effectsFeatureCollection,
+  description: 'china_effects_decomposition',
+  fileFormat: 'CSV',
+  folder: 'Effects_decomposition'
+});
