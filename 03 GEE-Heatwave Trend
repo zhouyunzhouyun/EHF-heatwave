@@ -1,1 +1,229 @@
+var table = ee.FeatureCollection("USDOS/LSIB_SIMPLE/2017")
+
+var ROI = ee.FeatureCollection(table).filterMetadata('country_na','equals','China')
+
+// 定义要素集合
+
+var yearStart = 1964;
+var yearEnd = 2022;
+
+// 创建一个空的 ImageCollection
+var ic = ee.ImageCollection([]);
+
+// 遍历所有年份
+for (var year = yearStart; year <= yearEnd; year++) {
+  // 构建图像 ID
+  var imageId = 'users/yunswu/CN_ERA5_LAND_HWN'+ '/' + 'ERA5_LAND_HWN_' + year.toString();
+  // print(imageId)
+  var timeStart = ee.Date.fromYMD(year, 1, 1).millis();
+  // print(timeStart)
+  // 加载图像
+  var image = ee.Image(imageId);
+  // print(image)
+  // 选择要合并的 band
+  // var bandsToMerge = ["HWA"];
+  // var mergedImage = image.select(["HWA"]).set('system:time_start', timeStart);
+  var mergedImage = image.set('system:time_start', timeStart);
+  // 将图像添加到 ImageCollection
+  ic = ic.merge(ee.ImageCollection([mergedImage]));
+}
+
+// 显示结果
+print('ic', ic)
+
+// var variable = "age_exposure"
+// var variable = "HWF"
+var variable = "HWN"
+
+
+var coll_mean_1964_1993 = ic.filterDate("1964-01-01","1993-12-31")
+                            .select(variable).mean()
+var coll_mean_1994_2022 = ic.filterDate("1994-01-01","2022-01-01")
+                            .select(variable).mean()                            
+var difference = coll_mean_1994_2022.subtract(coll_mean_1964_1993)                            
+// print("coll_mean_1964_1993",coll_mean_1964_1993)
+
+var coll = ic.select(variable)
+
+// print("coll",coll)
+// Map.addLayer(coll, {}, 'coll');
+
+var afterFilter = ee.Filter.lessThan({
+  leftField: 'system:time_start',
+  rightField: 'system:time_start'
+});
+// print("afterFilter",afterFilter)
+
+var joined = ee.ImageCollection(ee.Join.saveAll('after').apply({
+  primary: coll,
+  secondary: coll,
+  condition: afterFilter
+}));
+
+// print("joined",joined)
+
+//具体而言，这个函数首先检查i和j是否相等。如果相等，则返回0。
+//否则，函数计算j减去i的结果，并将其限制在-1到1之间。如果结果为负，则返回-1；如果结果为正，则返回1。
+//最后，返回的图像被转换为整数类型。
+var sign = function(i, j) { // i and j are images
+  return ee.Image(j).neq(i) // Zero case
+      .multiply(ee.Image(j).subtract(i).clamp(-1, 1)).int();
+};
+
+var kendall = ee.ImageCollection(joined.map(function(current) {
+  var afterCollection = ee.ImageCollection.fromImages(current.get('after'));
+  return afterCollection.map(function(image) {
+    // The unmask is to prevent accumulation of masked pixels that
+    // result from the undefined case of when either current or image
+    // is masked.  It won't affect the sum, since it's unmasked to zero.
+    return ee.Image(sign(current, image)).unmask(0);
+  });
+  // Set parallelScale to avoid User memory limit exceeded.
+}).flatten()).reduce('sum', 2);
+
+// print("kendall",kendall)
+
+var palette = ['red', 'white', 'green'];
+// Stretch this as necessary.
+// Map.addLayer(kendall, {palette: palette}, 'kendall');
+
+var slope = function(i, j) { // i and j are images
+  return ee.Image(j).subtract(i)
+      .divide(ee.Image(j).date().difference(ee.Image(i).date(), 'days'))
+      .rename('slope')
+      .float();
+};
+
+var slopes = ee.ImageCollection(joined.map(function(current) {
+  var afterCollection = ee.ImageCollection.fromImages(current.get('after'));
+  return afterCollection.map(function(image) {
+      return ee.Image(slope(current, image));
+  });
+}).flatten());
+
+var sensSlope = slopes.reduce(ee.Reducer.median(), 2); // Set parallelScale.
+// Map.addLayer(sensSlope, {palette: palette}, 'sensSlope');
+
+var epochDate = ee.Date('1970-01-01');
+var sensIntercept = coll.map(function(image) {
+  var epochDays = image.date().difference(epochDate, 'days').float();
+  return image.subtract(sensSlope.multiply(epochDays)).float();
+}).reduce(ee.Reducer.median(), 2);
+Map.addLayer(sensIntercept, {}, 'sensIntercept');
+
+
+// Values that are in a group (ties).  Set all else to zero.
+var groups = coll.map(function(i) {
+  var matches = coll.map(function(j) {
+    return i.eq(j); // i and j are images.
+  }).sum();
+  return i.multiply(matches.gt(1));
+});
+
+// Compute tie group sizes in a sequence.  The first group is discarded.
+var group = function(array) {
+  var length = array.arrayLength(0);
+  // Array of indices.  These are 1-indexed.
+  var indices = ee.Image([1])
+      .arrayRepeat(0, length)
+      .arrayAccum(0, ee.Reducer.sum())
+      .toArray(1);
+  var sorted = array.arraySort();
+  var left = sorted.arraySlice(0, 1);
+  var right = sorted.arraySlice(0, 0, -1);
+  // Indices of the end of runs.
+  var mask = left.neq(right)
+  // Always keep the last index, the end of the sequence.
+      .arrayCat(ee.Image(ee.Array([[1]])), 0);
+  var runIndices = indices.arrayMask(mask);
+  // Subtract the indices to get run lengths.
+  var groupSizes = runIndices.arraySlice(0, 1)
+      .subtract(runIndices.arraySlice(0, 0, -1));
+  return groupSizes;
+};
+
+// See equation 2.6 in Sen (1968).
+var factors = function(image) {
+  return image.expression('b() * (b() - 1) * (b() * 2 + 5)');
+};
+
+var groupSizes = group(groups.toArray());
+var groupFactors = factors(groupSizes);
+var groupFactorSum = groupFactors.arrayReduce('sum', [0])
+      .arrayGet([0, 0]);
+
+var count = joined.count();
+
+var kendallVariance = factors(count)
+    .subtract(groupFactorSum)
+    .divide(18)
+    .float();
+// Map.addLayer(kendallVariance, {}, 'kendallVariance');
+
+// Compute Z-statistics.
+var zero = kendall.multiply(kendall.eq(0));
+var pos = kendall.multiply(kendall.gt(0)).subtract(1);
+var neg = kendall.multiply(kendall.lt(0)).add(1);
+
+var z = zero
+    .add(pos.divide(kendallVariance.sqrt()))
+    .add(neg.divide(kendallVariance.sqrt()));
+// Map.addLayer(z, {min: -2, max: 2}, 'z');
+
+// https://en.wikipedia.org/wiki/Error_function#Cumulative_distribution_function
+function eeCdf(z) {
+  return ee.Image(0.5)
+      .multiply(ee.Image(1).add(ee.Image(z).divide(ee.Image(2).sqrt()).erf()));
+}
+
+function invCdf(p) {
+  return ee.Image(2).sqrt()
+      .multiply(ee.Image(p).multiply(2).subtract(1).erfInv());
+}
+
+// Compute P-values.
+var p = ee.Image(1).subtract(eeCdf(z.abs()));
+// Map.addLayer(p, {min: 0, max: 1}, 'p');
+
+// Pixels that can have the null hypothesis (there is no trend) rejected.
+// Specifically, if the true trend is zero, there would be less than 5%
+// chance of randomly obtaining the observed result (that there is a trend).
+// Map.addLayer(p.lte(0.025), {min: 0, max: 1}, 'significant trends');
+
+
+
+// 将计算结果添加到 imageCollection
+var resultImageCollection = ee.ImageCollection([p,z,sensIntercept,sensSlope]);
+// print('resultImageCollection',resultImageCollection)
+
+//得到波段列表
+var indexlist = ee.List([p,z,sensIntercept,sensSlope])
+// print(indexlist)
+//通常使用列表的异步执行方式
+//列表通过异步调用的方式在其内部将GEE的List对象转换为了JavaScript的数组对象，之后使用普通的JavaScript方式来处理
+
+// exportImage(p, ROI, "P_"+variable);
+// exportImage(z, ROI, "Z_"+variable);
+// exportImage(sensSlope, ROI, "sensSlope_"+variable);
+// exportImage(sensIntercept, ROI, "sensIntercept_"+variable);
+
+ 
+function exportImage(image, region, fileName) {
+  Export.image.toDrive({
+    image: image,
+    description: fileName, 
+    folder: "batch-mean-change",
+    scale: 11132,
+    region: ROI,
+    maxPixels: 1e13,
+    crs: "EPSG:4326"
+  });
+
+}
+
+exportImage(coll_mean_1964_1993, ROI, "mean_1964_1993_"+variable);
+// exportImage(coll_mean_1994_2022, ROI, "mean_1994_2022_"+variable);
+exportImage(difference, ROI, "difference_"+variable);
+
+
 
