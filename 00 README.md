@@ -1,7 +1,9 @@
 # Heatwaves in China
-Heatwaves in China: historical trends and population exposure based on Excess Heat Factor (1964-2022)
+Assessment of Spatiotemporal Variation in Heatwaves and Elderly Population Exposure in China (1964-2022)
 
-The primary objectives of this study are threefold: 
-(1) to synthesize the characteristics and spatiotemporal variation trends of heatwaves in China from 1964 to 2022, utilizing the EHF as a basis;
-(2) to quantify the exposure of the elderly population to heatwaves in China between 2000 and 2020, and to decompose the climate, population and their combined impact on the exposure over this timeframe; 
-(3) to evaluate the 2022 heatwave in China using various heatwave definitions, providing practical implications for future research and policy development.
+TTherefore, the primary objectives of this study are: 
+(1) identify the optimal index to evaluate heatwaves in China; 
+(2) to calculate the EHF at the grid level from 1964 to 2022 using the GEE platform; 
+(3) to synthesize the spatiotemporal variation in heatwaves based on the EHF definition;
+(4) to assess the exposure of elderly population faced during heatwaves from 2001 to 2020,
+thereby providing practical insights for future research and policy formulation.
