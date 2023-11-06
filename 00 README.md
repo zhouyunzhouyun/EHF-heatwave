@@ -7,3 +7,4 @@ TTherefore, the primary objectives of this study are:
 (3) to synthesize the spatiotemporal variation in heatwaves based on the EHF definition;
 (4) to assess the exposure of elderly population faced during heatwaves from 2001 to 2020,
 thereby providing practical insights for future research and policy formulation.
+![Uploading Figure abstract-change.png…]()
