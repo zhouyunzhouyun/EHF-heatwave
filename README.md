@@ -1,4 +1,8 @@
-Heatwaves in China
+Citation：Zhou, Y.; S. Gu; H. Yang; Y. Li; Y. Zhao; Y. Li; and Q. Yang. 2024. Spatiotemporal variation in heatwaves and elderly population exposure across China. Science of The Total Environment 917,170245.
+
+Link：http://doi.org/10.1016/j.scitotenv.2024.170245.
+
+
 
 ![Figure abstract-1118](https://github.com/zhouyunzhouyun/EHF-heatwave/assets/101540420/626aedce-bd81-4fa5-bf67-ecd1e7383689)
 
